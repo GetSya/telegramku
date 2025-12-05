@@ -851,7 +851,7 @@ async function showCart(chatId: number) {
   
   const text = `🛒 *KERANJANG*\n\n${itemsText}\n\n💰 *Total: ${formatRp(total)}*`;
   
-  const keyboard = [];
+    const keyboard: TelegramBot.InlineKeyboardButton[][] = [];
   
   for (const item of session.cart) {
     keyboard.push([
@@ -877,15 +877,17 @@ async function showCart(chatId: number) {
 
 async function showOrderManagement(chatId: number) {
   const pending = db.orders.filter(o => o.status === 'PENDING');
-  const history = db.orders.filter(o => o.status !== 'PENDING').slice(-5); // Last 5
+  const history = db.orders.filter(o => o.status !== 'PENDING').slice(-5); // Ambil 5 terakhir
   
   let text = `📋 *ORDER MANAGEMENT*\n\n`;
   
-  let keyboard = [];
+  // PERBAIKAN DI SINI: Tambahkan tipe data eksplisit
+  let keyboard: TelegramBot.InlineKeyboardButton[][] = [];
   
   if (pending.length > 0) {
     text += `⏳ *PENDING VERIFIKASI:*\n`;
     pending.forEach(o => text += `- ${o.invoice} (${o.buyerName})\n`);
+    // Kita isi keyboard dengan map
     keyboard = pending.map(o => [{ text: `⏳ ${o.invoice}`, callback_data: `order_detail_${o.invoice}` }]);
   } else {
     text += `✅ Tidak ada pesanan pending.\n`;
@@ -894,6 +896,7 @@ async function showOrderManagement(chatId: number) {
   if (history.length > 0) {
     text += `\n📜 *RIWAYAT TERAKHIR:*\n`;
     history.forEach(o => text += `- ${o.status} ${o.invoice}\n`);
+    // Kita push tombol baru ke keyboard yang sudah ada
     history.forEach(o => keyboard.push([{ text: `📜 ${o.invoice}`, callback_data: `order_detail_${o.invoice}` }]));
   }
   
@@ -923,7 +926,7 @@ async function showOrderDetail(chatId: number, invoice: string) {
     `🔄 Status: ${order.status}\n\n` +
     `🛒 Items:\n${itemsText}`;
   
-  const keyboard = [];
+const keyboard: TelegramBot.InlineKeyboardButton[][] = [];
   
   if (order.status === 'PENDING') {
     keyboard.push([{ text: "✅ Verifikasi Pembayaran", callback_data: `verify_order_${order.invoice}` }]);
