@@ -4,28 +4,28 @@ import TelegramBot from 'node-telegram-bot-api';
 import * as XLSX from 'xlsx';
 
 // =======================================================
-// KONFIGURASI ENGINE & SERVER
+// 1. SETUP ENGINE
 // =======================================================
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-// GANTI USERNAME ADMIN DI SINI (Tanpa @)
-const OWNER_USERNAME = 'sofunsyabi'; 
+const OWNER_USERNAME = 'sofunsyabi'; // GANTI username admin tanpa @
 
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN wajib ada');
 
 const bot = new TelegramBot(token, { polling: false });
 
 // =======================================================
-// STRUKTUR DATABASE 
+// 2. DATA STRUKTUR (DATABASE)
 // =======================================================
 
 type Product = {
   id: string;
   code: string;
   name: string;
+  description: string; // <-- ITEM BARU: DESKRIPSI
   category: string;
   unit: string;
   priceBuy: number;
@@ -51,10 +51,12 @@ type Order = {
   paymentProof?: string;
 };
 
+// Langkah State Machine ditambah: ADD_PROD_DESC
 type UserSession = {
-  step: 'IDLE' | 'ADD_PROD_NAME' | 'ADD_PROD_CAT' | 'ADD_PROD_UNIT' | 'ADD_PROD_BUY' | 'ADD_PROD_SELL' | 'ADD_PROD_STOCK' | 'CMD_KEY' | 'CMD_VAL' | 'CONFIRM_PAYMENT' | 'BROADCAST_MSG' | 'LIVE_CHAT' | 'EDIT_PRICE_VAL';
+  step: 'IDLE' | 'ADD_PROD_NAME' | 'ADD_PROD_DESC' | 'ADD_PROD_CAT' | 'ADD_PROD_UNIT' | 'ADD_PROD_BUY' | 'ADD_PROD_SELL' | 'ADD_PROD_STOCK' | 'CMD_KEY' | 'CMD_VAL' | 'CONFIRM_PAYMENT' | 'BROADCAST_MSG' | 'LIVE_CHAT' | 'EDIT_PRICE_VAL';
   temp: any;
   cart: CartItem[];
+  msgId?: number; // Menyimpan ID pesan terakhir agar bisa dihapus/edit (UI lebih bersih)
 };
 
 type DB = {
@@ -62,32 +64,29 @@ type DB = {
   admins: number[]; 
   products: Product[];
   orders: Order[];
-  categories: string[];
-  units: string[];
   customCommands: Record<string, string>;
   users: Record<number, UserSession>;
 };
 
 const globalForDB = global as unknown as { db: DB };
 const db: DB = globalForDB.db || {
-  company: { name: "Sofunsyabi Store", addr: "Jakarta, ID", email: "admin@bot.com" },
+  company: { name: "Sofunsyabi Store", addr: "Jakarta, Indonesia", email: "admin@store.id" },
   admins: [], 
-  categories: ["Makanan", "Minuman", "Jasa", "Digital"],
-  units: ["PCS", "PACK", "BOX", "JAM"],
   products: [
-    { id: "1", code: "P-001", name: "Premium Coffee", category: "Minuman", unit: "PCS", priceBuy: 5000, priceSell: 15000, stock: 50 },
-    { id: "2", code: "J-002", name: "Jasa Desain", category: "Jasa", unit: "PROJECT", priceBuy: 0, priceSell: 50000, stock: 999 }
+    { 
+        id: "1", code: "KOPI01", name: "Kopi Gula Aren", 
+        description: "Kopi susu dengan gula aren asli, disajikan dingin. Tahan 2 hari di kulkas.", // Deskripsi dummy
+        category: "Minuman", unit: "CUP", priceBuy: 5000, priceSell: 18000, stock: 50 
+    }
   ],
   orders: [],
-  customCommands: { 
-      "/about": "Bot Marketplace Canggih v2.1" 
-  },
+  customCommands: { "/help": "Gunakan tombol menu di bawah." },
   users: {}
 };
 if (process.env.NODE_ENV !== 'production') globalForDB.db = db;
 
 // =======================================================
-// HELPER FUNCTIONS
+// 3. HELPERS
 // =======================================================
 
 const formatRp = (n: number) => `Rp ${n.toLocaleString('id-ID')}`;
@@ -98,41 +97,39 @@ const getSession = (chatId: number) => {
 const isAdmin = (u?: string, id?: number) => (u === OWNER_USERNAME || (id && db.admins.includes(id)));
 const resetSession = (s: UserSession) => { s.step = 'IDLE'; s.temp = {}; };
 
-async function generateExcelReport() {
-    const dataToExport = db.orders.map(o => ({
-        Invoice: o.invoice,
-        Tanggal: o.date,
-        Pembeli: o.buyerName,
-        Total: o.totalPrice,
-        Status: o.status,
-        Items: o.items.map(i => `${i.name} (${i.qty})`).join(', ')
+async function generateExcel() {
+    const data = db.orders.map(o => ({
+        Invoice: o.invoice, Date: o.date, Buyer: o.buyerName, 
+        Items: o.items.map(i=>`${i.name}(${i.qty})`).join(', '),
+        Total: o.totalPrice, Status: o.status
     }));
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan");
-    return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Sales");
+    return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 }
 
 // =======================================================
-// MAIN HANDLER
+// 4. HANDLER UTAMA
 // =======================================================
 
 export async function POST(req: Request) {
     try {
         const update = await req.json();
-
-        if (update.callback_query) {
-            await handleCallback(update.callback_query);
-        } else if (update.message) {
+        if (update.callback_query) await handleCallback(update.callback_query);
+        else if (update.message) {
             if (update.message.text) await handleMessage(update.message);
             else if (update.message.photo) await handlePhoto(update.message);
         }
         return NextResponse.json({ status: 'ok' });
     } catch (e: any) {
-        console.error("Error:", e);
+        console.error(e);
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }
+
+// =======================================================
+// 5. LOGIC MESSAGE
+// =======================================================
 
 async function handleMessage(msg: TelegramBot.Message) {
     const chatId = msg.chat.id;
@@ -140,267 +137,314 @@ async function handleMessage(msg: TelegramBot.Message) {
     const username = msg.from?.username;
     const session = getSession(chatId);
 
-    // Auto Admin logic
     if (username === OWNER_USERNAME && !db.admins.includes(chatId)) db.admins.push(chatId);
 
-    // 1. Cek Input Proses (Input Harga, Nama, dll)
+    // 1. INPUT STEP (ADMIN ADD PRODUCT / USER CHECKOUT)
     if (session.step !== 'IDLE') {
-        await processInputSteps(chatId, text, session);
+        await processInput(chatId, text, session);
         return;
     }
 
-    // 2. Custom Command
-    const cmdKey = text.split(' ')[0];
-    if (db.customCommands[cmdKey]) {
-        await bot.sendMessage(chatId, `🤖 ${db.customCommands[cmdKey]}`);
-        return;
-    }
-
-    // 3. Command Utama
+    // 2. MAIN MENU
     if (text === '/start' || text === '/menu') {
         await showMainMenu(chatId, msg.from?.first_name || 'Kak');
     }
     else if (text === '/admin') {
-        if (isAdmin(username, chatId)) await showAdminDashboard(chatId);
-        else await bot.sendMessage(chatId, "⛔ Menu khusus Admin.");
+        if(isAdmin(username, chatId)) await showAdminDashboard(chatId);
+        else bot.sendMessage(chatId, "⛔ Anda bukan Admin.");
     }
     else {
-        await bot.sendMessage(chatId, "💡 Ketik /menu untuk belanja atau /admin untuk panel admin.");
+        // Cek custom command
+        const key = text.split(' ')[0];
+        if (db.customCommands[key]) await bot.sendMessage(chatId, db.customCommands[key]);
+        else await bot.sendMessage(chatId, "Silakan pilih menu.", {reply_markup:{inline_keyboard:[[{text:"🛍️ Menu Belanja", callback_data:"menu_catalog"}]]}});
     }
 }
 
 async function handlePhoto(msg: TelegramBot.Message) {
-    const chatId = msg.chat.id;
-    const session = getSession(chatId);
+    const session = getSession(msg.chat.id);
     if (session.step === 'CONFIRM_PAYMENT') {
-        const fileId = msg.photo ? msg.photo[msg.photo.length-1].file_id : 'Unknown';
-        await finishCheckout(chatId, session, `FOTO BUKTI (FileID: ${fileId})`);
+        const fid = msg.photo ? msg.photo[msg.photo.length-1].file_id : 'xx';
+        await finishCheckout(msg.chat.id, session, fid, msg.from?.first_name || 'User');
     }
 }
 
-async function handleCallback(query: TelegramBot.CallbackQuery) {
-    const chatId = query.message?.chat.id!;
-    const data = query.data!;
+// =======================================================
+// 6. LOGIC BUTTON (CALLBACK) - UI NAVIGATION
+// =======================================================
+
+async function handleCallback(q: TelegramBot.CallbackQuery) {
+    const chatId = q.message?.chat.id!;
+    const msgId = q.message?.message_id; // Kita pakai ini untuk edit message agar rapi
+    const data = q.data!;
     const session = getSession(chatId);
-    const username = query.from.username;
+    
+    try { await bot.answerCallbackQuery(q.id); } catch(e){}
 
-    // Bersihkan loading spinner di tombol
-    try { await bot.answerCallbackQuery(query.id); } catch(e){}
+    // A. MENU & CATALOG UI (USER)
+    if (data === 'menu_catalog') await showCatalogList(chatId, msgId); // Ganti dari showProductCatalog ke showCatalogList
+    if (data === 'menu_cart') await showCart(chatId, msgId);
+    if (data === 'menu_main') await bot.deleteMessage(chatId, msgId!).then(() => showMainMenu(chatId, "Kak"));
 
-    // === NAVIGATION MAIN MENU ===
-    if (data === 'menu_catalog') await showProductCatalog(chatId);
-    if (data === 'menu_cart') await showCart(chatId);
-    if (data === 'menu_chat') {
-        session.step = 'LIVE_CHAT';
-        await bot.sendMessage(chatId, "💬 **LIVE CHAT**\n\nSilakan ketik pesan Anda. Admin akan membaca & membalas pesan Anda.\nKetik **BATAL** untuk selesai.", {parse_mode: 'Markdown'});
-    }
-    if (data === 'menu_info') {
-         await bot.sendMessage(chatId, `🏢 **${db.company.name}**\n📍 ${db.company.addr}\n📧 ${db.company.email}`, {parse_mode: 'Markdown'});
+    // B. DETAIL PRODUK VIEW (USER)
+    if (data.startsWith('view_p_')) {
+        const pid = data.replace('view_p_', '');
+        await showProductDetail(chatId, pid, msgId);
     }
 
-    // === CART & CHECKOUT ===
-    if (data.startsWith('add_cart_')) {
-        const pid = data.split('_')[2];
+    // C. ADD TO CART
+    if (data.startsWith('add_c_')) {
+        const pid = data.replace('add_c_', '');
         const p = db.products.find(x => x.id === pid);
         if (p && p.stock > 0) {
-            const exist = session.cart.find(c => c.productId === pid);
-            if(exist) exist.qty++;
-            else session.cart.push({ productId: pid, name: p.name, price: p.priceSell, qty: 1 });
-            await bot.sendMessage(chatId, `✅ **${p.name}** masuk keranjang!`, {parse_mode:'Markdown'});
+            const ex = session.cart.find(c => c.productId === pid);
+            if(ex) ex.qty++; else session.cart.push({ productId: pid, name: p.name, price: p.priceSell, qty: 1 });
+            // Alert kecil muncul di layar user
+            await bot.answerCallbackQuery(q.id, { text: `✅ ${p.name} (+1) masuk keranjang!` }); 
         } else {
-            await bot.sendMessage(chatId, "❌ Stok habis.");
+            await bot.answerCallbackQuery(q.id, { text: `❌ Stok Habis!`, show_alert: true });
         }
     }
+
+    // D. CHECKOUT SYSTEM
     if (data === 'checkout_start') {
-        if (session.cart.length === 0) return bot.sendMessage(chatId, "Keranjang kosong.");
+        if(session.cart.length===0) return bot.answerCallbackQuery(q.id, { text: "Keranjang kosong!", show_alert:true});
         session.step = 'CONFIRM_PAYMENT';
         const total = session.cart.reduce((a,b)=>a+(b.price*b.qty),0);
-        await bot.sendMessage(chatId, `🧾 **TOTAL TAGIHAN: ${formatRp(total)}**\n\nSilakan transfer dan **KIRIM BUKTI (FOTO/TEXT)** disini sekarang.`, {parse_mode:'Markdown'});
+        await bot.sendMessage(chatId, `🧾 **TOTAL BAYAR: ${formatRp(total)}**\n\nNomor Rekening:\nBCA 1234567890 (Toko Bot)\n\nSilakan kirimkan **FOTO BUKTI** atau Tulis 'Sudah'.`, {parse_mode:'Markdown'});
     }
-    if (data === 'cart_clear') {
-        session.cart = [];
-        await bot.sendMessage(chatId, "🗑️ Keranjang dikosongkan.");
-    }
+    if (data === 'cart_clear') { session.cart = []; await showCart(chatId, msgId); }
 
-    // === ADMIN AREA ===
-    if (!isAdmin(username, chatId)) return;
+    // E. ADMIN AREA
+    if (!isAdmin(q.from.username, chatId)) return;
+    
+    // Verifikasi Pembayaran
+    if (data.startsWith('v_acc_')) await processOrder(data.replace('v_acc_', ''), 'PAID', chatId, msgId!);
+    if (data.startsWith('v_rej_')) await processOrder(data.replace('v_rej_', ''), 'REJECTED', chatId, msgId!);
 
-    if (data === 'adm_dash') await showAdminDashboard(chatId);
-    if (data === 'adm_products') await showAdminProducts(chatId);
-    if (data === 'adm_add_prod') {
+    if (data === 'adm_add') {
         session.step = 'ADD_PROD_NAME';
-        await bot.sendMessage(chatId, "🔤 Masukkan **NAMA ITEM**:", {parse_mode: 'Markdown'});
+        await bot.sendMessage(chatId, "1. Masukkan **NAMA PRODUK**:", {parse_mode:'Markdown'});
     }
-    if (data === 'adm_export') {
-        if (db.orders.length === 0) return bot.sendMessage(chatId, "Data Order Kosong.");
-        await bot.sendMessage(chatId, "⏳ Membuat file Excel...");
-        const buf = await generateExcelReport();
-        await bot.sendDocument(chatId, buf, {}, { 
-            filename: `Rekap_${Date.now()}.xlsx`, 
-            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-        });
-    }
-    if (data === 'adm_broadcast') {
-        session.step = 'BROADCAST_MSG';
-        await bot.sendMessage(chatId, "📢 Tulis pesan Broadcast:");
-    }
-    if (data.startsWith('adm_edit_')) {
-        session.temp.editId = data.split('_')[2];
-        session.step = 'EDIT_PRICE_VAL';
-        await bot.sendMessage(chatId, "💰 Masukkan Harga Baru (Angka):");
-    }
-    if (data.startsWith('adm_del_')) {
-        const pid = data.split('_')[2];
-        db.products = db.products.filter(p => p.id !== pid);
-        await bot.sendMessage(chatId, "✅ Produk dihapus.");
-        await showAdminProducts(chatId);
+    if (data === 'adm_list') await showAdminList(chatId);
+    if (data === 'adm_xl') {
+        await bot.sendDocument(chatId, await generateExcel(), {}, { filename:'Rekap.xlsx', contentType: 'application/xlsx'});
     }
 }
 
-// === VIEW FUNCTIONS ===
+// =======================================================
+// 7. INPUT PROCESSOR (STATE MACHINE)
+// =======================================================
+
+async function processInput(chatId: number, text: string, session: UserSession) {
+    if(text.toLowerCase() === 'batal') { resetSession(session); return bot.sendMessage(chatId, "Batal."); }
+
+    // FLOW TAMBAH PRODUK BARU
+    if (session.step === 'ADD_PROD_NAME') {
+        session.temp.name = text; 
+        session.step = 'ADD_PROD_DESC'; // <-- FLOW BARU
+        await bot.sendMessage(chatId, "2. Masukkan **DESKRIPSI PRODUK** (Penjelasan singkat, kondisi, dll):", {parse_mode:'Markdown'});
+    }
+    else if (session.step === 'ADD_PROD_DESC') {
+        session.temp.desc = text; 
+        session.step = 'ADD_PROD_CAT';
+        await bot.sendMessage(chatId, "3. Masukkan **KATEGORI** (cth: Makanan):", {parse_mode:'Markdown'});
+    }
+    else if (session.step === 'ADD_PROD_CAT') {
+        session.temp.cat = text; 
+        session.step = 'ADD_PROD_UNIT';
+        await bot.sendMessage(chatId, "4. Masukkan **SATUAN** (cth: PCS):", {parse_mode:'Markdown'});
+    }
+    else if (session.step === 'ADD_PROD_UNIT') {
+        session.temp.unit = text; 
+        session.step = 'ADD_PROD_BUY';
+        await bot.sendMessage(chatId, "5. Masukkan **HARGA MODAL** (Angka):");
+    }
+    else if (session.step === 'ADD_PROD_BUY') {
+        session.temp.buy = parseInt(text); 
+        session.step = 'ADD_PROD_SELL';
+        await bot.sendMessage(chatId, "6. Masukkan **HARGA JUAL** (Angka):");
+    }
+    else if (session.step === 'ADD_PROD_SELL') {
+        session.temp.sell = parseInt(text); 
+        session.step = 'ADD_PROD_STOCK';
+        await bot.sendMessage(chatId, "7. Masukkan **STOK AWAL** (Angka):");
+    }
+    else if (session.step === 'ADD_PROD_STOCK') {
+        db.products.push({
+            id: Date.now().toString(), code: `ITM${Date.now()}`,
+            name: session.temp.name, 
+            description: session.temp.desc, // Simpan Deskripsi
+            category: session.temp.cat, unit: session.temp.unit,
+            priceBuy: session.temp.buy, priceSell: session.temp.sell, 
+            stock: parseInt(text)
+        });
+        resetSession(session);
+        await bot.sendMessage(chatId, "✅ Produk Berhasil Disimpan!");
+    }
+    // FLOW USER CHECKOUT
+    else if (session.step === 'CONFIRM_PAYMENT') {
+        await finishCheckout(chatId, session, text, 'User');
+    }
+    // LIVE CHAT
+    else if (session.step === 'LIVE_CHAT') {
+        db.admins.forEach(id => bot.sendMessage(id, `💬 User: ${text}`));
+        bot.sendMessage(chatId, "Terkirim.");
+    }
+}
+
+// =======================================================
+// 8. UI FUNCTIONS (DISPLAYS) - PERUBAHAN TAMPILAN
+// =======================================================
 
 async function showMainMenu(chatId: number, name: string) {
-    const text = `Selamat datang, *${name}*! 👋\nSilakan pilih menu belanja di bawah ini:`;
+    const text = `Halo *${name}*! 👋 Selamat datang di ${db.company.name}.\nSilakan pilih menu:`;
     await bot.sendMessage(chatId, text, {
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
-                [{ text: "🛍️ Lihat Produk", callback_data: "menu_catalog" }, { text: "🛒 Keranjang Saya", callback_data: "menu_cart" }],
-                [{ text: "💬 Live Chat", callback_data: "menu_chat" }, { text: "🏢 Info Toko", callback_data: "menu_info" }],
-                (isAdmin(undefined, chatId) ? [{ text: "🔧 ADMIN PANEL", callback_data: "adm_dash" }] : [])
+                [{ text: "🛍️ Katalog Produk", callback_data: "menu_catalog" }, { text: "🛒 Keranjang Saya", callback_data: "menu_cart" }],
+                [{ text: "📞 Hubungi Admin", callback_data: "menu_chat" }],
+                (isAdmin(undefined, chatId) ? [{text: "🔧 PANEL ADMIN", callback_data: "adm_list"}] : [])
             ]
         }
     });
 }
 
-async function showAdminDashboard(chatId: number) {
-    await bot.sendMessage(chatId, `🔧 **ADMIN PANEL**\nUser: ${OWNER_USERNAME}\nTotal Orders: ${db.orders.length}`, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "📦 Daftar Produk & Edit", callback_data: "adm_products" }],
-                [{ text: "➕ Tambah Produk Baru", callback_data: "adm_add_prod" }],
-                [{ text: "📥 DOWNLOAD EXCEL", callback_data: "adm_export" }],
-                [{ text: "📢 Broadcast Pesan", callback_data: "adm_broadcast" }]
-            ]
-        }
-    });
-}
+// TAMPILAN DAFTAR PRODUK BERUPA TOMBOL GRID
+async function showCatalogList(chatId: number, msgIdToEdit?: number) {
+    if(db.products.length === 0) return bot.sendMessage(chatId, "⚠️ Belum ada produk.");
 
-async function showProductCatalog(chatId: number) {
-    if (db.products.length === 0) return bot.sendMessage(chatId, "Produk Kosong.");
-    for (const p of db.products) {
-        await bot.sendMessage(chatId, `🏷️ **${p.name}**\n💰 ${formatRp(p.priceSell)}\n📦 Stok: ${p.stock}\n📂 ${p.category}`, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [[{ text: "➕ Masukkan Keranjang", callback_data: `add_cart_${p.id}` }]] }
-        });
-    }
-}
-
-async function showAdminProducts(chatId: number) {
-    if (db.products.length === 0) return bot.sendMessage(chatId, "Produk Kosong.");
-    for (const p of db.products) {
-        await bot.sendMessage(chatId, `📦 ${p.name}\nStok: ${p.stock} | Hrg: ${formatRp(p.priceSell)}`, {
-            reply_markup: { inline_keyboard: [[{ text: "✏️ Ubah Harga", callback_data: `adm_edit_${p.id}` }, { text: "❌ Hapus", callback_data: `adm_del_${p.id}` }]] }
-        });
-    }
-}
-
-async function showCart(chatId: number) {
-    const cart = getSession(chatId).cart;
-    if(cart.length === 0) return bot.sendMessage(chatId, "Keranjang Anda Kosong 😢");
+    // Buat Grid Tombol 2 Kolom
+    const productButtons = [];
+    const products = [...db.products];
     
-    let msg = "🛒 **KERANJANG BELANJA**\n\n";
+    while (products.length > 0) {
+        const row = products.splice(0, 2); // Ambil 2 produk per baris
+        productButtons.push(
+            row.map(p => ({ text: p.name, callback_data: `view_p_${p.id}` }))
+        );
+    }
+    // Tambah tombol navigasi bawah
+    productButtons.push([{text: "⬅️ Menu Utama", callback_data: "menu_main"}, {text: "🛒 Lihat Keranjang", callback_data: "menu_cart"}]);
+
+    const options: any = { parse_mode: 'Markdown', reply_markup: { inline_keyboard: productButtons } };
+    
+    // Jika bisa diedit (transisi lebih mulus)
+    if (msgIdToEdit) {
+        try {
+            await bot.editMessageText("🛍️ **PILIH KATEGORI / PRODUK**\nKlik nama item untuk lihat deskripsi & detail:", {
+                chat_id: chatId, message_id: msgIdToEdit, ...options
+            });
+            return;
+        } catch(e) {} // Fallback jika gagal edit (biasanya karena pesan terlalu lama)
+    } 
+    
+    await bot.sendMessage(chatId, "🛍️ **PILIH KATEGORI / PRODUK**\nKlik nama item untuk lihat deskripsi & detail:", options);
+}
+
+// TAMPILAN DETAIL PRODUK + DESKRIPSI
+async function showProductDetail(chatId: number, pid: string, msgIdToEdit?: number) {
+    const p = db.products.find(x => x.id === pid);
+    if (!p) return;
+
+    // Teks Deskripsi dibuat tebal dan rapi
+    const caption = `📦 **${p.name.toUpperCase()}**\n\n📝 **Deskripsi:**\n_${p.description}_\n\n🏷 Jenis: ${p.category}\n💰 Harga: **${formatRp(p.priceSell)}**\n📦 Sisa Stok: ${p.stock} ${p.unit}`;
+
+    const kb = {
+        inline_keyboard: [
+            [{ text: "🛒 TAMBAH KE KERANJANG", callback_data: `add_c_${p.id}` }],
+            [{ text: "⬅️ Kembali ke Katalog", callback_data: "menu_catalog" }, { text: "Bayar 💳", callback_data: "menu_cart" }]
+        ]
+    };
+
+    if (msgIdToEdit) {
+         try {
+            await bot.editMessageText(caption, { chat_id: chatId, message_id: msgIdToEdit, parse_mode: 'Markdown', reply_markup: kb });
+            return;
+         } catch(e) {}
+    }
+    await bot.sendMessage(chatId, caption, { parse_mode: 'Markdown', reply_markup: kb });
+}
+
+async function showCart(chatId: number, msgId?: number) {
+    const cart = getSession(chatId).cart;
+    let msg = cart.length ? "🛒 **ISI KERANJANG**\n\n" : "🛒 **Keranjang Kosong**";
     let total = 0;
-    cart.forEach((i, x) => {
-        msg += `${x+1}. ${i.name} (${i.qty}) = ${formatRp(i.price*i.qty)}\n`;
-        total += i.price*i.qty;
-    });
-    msg += `\n💵 **Total: ${formatRp(total)}**`;
+    cart.forEach(i => { msg += `• ${i.name} (${i.qty}) = ${formatRp(i.qty*i.price)}\n`; total += i.qty*i.price; });
+    msg += cart.length ? `\n💰 **TOTAL: ${formatRp(total)}**` : "";
 
-    await bot.sendMessage(chatId, msg, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [[{ text: "✅ CHECKOUT & BAYAR", callback_data: "checkout_start" }, { text: "🗑️ Hapus Semua", callback_data: "cart_clear" }]]
-        }
-    });
+    const btn = cart.length ? [[{ text: "✅ CHECKOUT SEKARANG", callback_data: "checkout_start" }, {text:"🗑 Kosongkan", callback_data:"cart_clear"}]] : [];
+    btn.push([{text:"⬅️ Belanja Lagi", callback_data:"menu_catalog"}, {text:"🏠 Home", callback_data:"menu_main"}]);
+
+    if(msgId) try { await bot.editMessageText(msg, {chat_id: chatId, message_id: msgId, parse_mode:'Markdown', reply_markup:{inline_keyboard:btn}}); return; } catch(e){}
+    await bot.sendMessage(chatId, msg, {parse_mode:'Markdown', reply_markup:{inline_keyboard:btn}});
 }
 
-// === LOGIC PROCESS INPUT ===
-async function processInputSteps(chatId: number, text: string, session: UserSession) {
-    if(text.toLowerCase() === 'batal') {
-        resetSession(session);
-        return bot.sendMessage(chatId, "❌ Proses dibatalkan. Ketik /menu");
-    }
+// =======================================================
+// 9. LOGIC ORDER ADMIN
+// =======================================================
 
-    if (session.step === 'ADD_PROD_NAME') {
-        session.temp.name = text; session.step = 'ADD_PROD_CAT';
-        bot.sendMessage(chatId, "Ketik **KATEGORI** (Misal: Makanan/Jasa):", {parse_mode:'Markdown'});
-    }
-    else if (session.step === 'ADD_PROD_CAT') {
-        session.temp.cat = text; session.step = 'ADD_PROD_UNIT';
-        bot.sendMessage(chatId, "Ketik **SATUAN** (Misal: PCS/PACK):", {parse_mode:'Markdown'});
-    }
-    else if (session.step === 'ADD_PROD_UNIT') {
-        session.temp.unit = text; session.step = 'ADD_PROD_BUY';
-        bot.sendMessage(chatId, "Masukkan **HARGA MODAL** (Angka saja):", {parse_mode:'Markdown'});
-    }
-    else if (session.step === 'ADD_PROD_BUY') {
-        session.temp.buy = parseInt(text); session.step = 'ADD_PROD_SELL';
-        bot.sendMessage(chatId, "Masukkan **HARGA JUAL** (Angka saja):", {parse_mode:'Markdown'});
-    }
-    else if (session.step === 'ADD_PROD_SELL') {
-        session.temp.sell = parseInt(text); session.step = 'ADD_PROD_STOCK';
-        bot.sendMessage(chatId, "Masukkan **JUMLAH STOK** (Angka saja):", {parse_mode:'Markdown'});
-    }
-    else if (session.step === 'ADD_PROD_STOCK') {
-        db.products.push({
-            id: Date.now().toString(),
-            code: `P${Math.floor(Math.random()*900)}`,
-            name: session.temp.name, category: session.temp.cat, unit: session.temp.unit,
-            priceBuy: session.temp.buy, priceSell: session.temp.sell, stock: parseInt(text)
-        });
-        resetSession(session);
-        await bot.sendMessage(chatId, "✅ Produk Tersimpan!");
-        await showAdminDashboard(chatId);
-    }
-    else if (session.step === 'CONFIRM_PAYMENT') {
-        await finishCheckout(chatId, session, text);
-    }
-    else if (session.step === 'BROADCAST_MSG') {
-        Object.keys(db.users).forEach(uid => {
-            bot.sendMessage(Number(uid), `📢 **PENGUMUMAN**\n\n${text}`, {parse_mode:'Markdown'}).catch(()=>{});
-        });
-        resetSession(session);
-        bot.sendMessage(chatId, "Broadcast terkirim.");
-    }
-    else if (session.step === 'EDIT_PRICE_VAL') {
-        const p = db.products.find(x => x.id === session.temp.editId);
-        if(p) { p.priceSell = parseInt(text); bot.sendMessage(chatId, "✅ Harga update."); }
-        resetSession(session);
-    }
-    else if (session.step === 'LIVE_CHAT') {
-        db.admins.forEach(id => bot.sendMessage(id, `💬 **CHAT USER**\nDari: ${text}`).catch(()=>{}));
-        bot.sendMessage(chatId, "✅ Terkirim ke Admin.");
-    }
-}
-
-async function finishCheckout(chatId: number, session: UserSession, proof: string) {
+async function finishCheckout(chatId: number, session: UserSession, proof: string, buyerName: string) {
     const total = session.cart.reduce((a,b)=>a+(b.price*b.qty),0);
-    const invoice = `INV/${Date.now()}`;
+    const invoice = `INV${Date.now()}`; // Short Invoice ID
+
     db.orders.push({
-        invoice, date: new Date().toLocaleDateString(), buyerName: 'User', buyerId: chatId,
+        invoice, date: new Date().toLocaleDateString(), buyerName, buyerId: chatId,
         items: [...session.cart], totalPrice: total, status: 'PENDING', paymentProof: proof
     });
-    session.cart = [];
-    session.step = 'IDLE';
-    await bot.sendMessage(chatId, `✅ **Terima Kasih!**\nOrder No: ${invoice}\nStatus: Menunggu verifikasi admin.`);
+
+    session.cart.forEach(c => { const p = db.products.find(x => x.id === c.productId); if(p) p.stock -= c.qty; });
+    session.cart = []; session.step = 'IDLE';
+
+    await bot.sendMessage(chatId, `✅ Pesanan **${invoice}** Diterima!\nMohon tunggu verifikasi admin.`);
+
+    // NOTIF ADMIN
+    const notif = `🔔 **ORDER BARU**\n${invoice}\nBuyer: ${buyerName}\nTotal: ${formatRp(total)}`;
+    const kb = { inline_keyboard: [[{text:"✅ TERIMA", callback_data:`v_acc_${invoice}`}, {text:"❌ TOLAK", callback_data:`v_rej_${invoice}`}]]};
     
-    // Alert Admin
-    db.admins.forEach(aid => {
-        bot.sendMessage(aid, `🚨 **ORDER MASUK**\n${invoice}\n${formatRp(total)}\nBukti: ${proof}`, {parse_mode:'Markdown'});
+    db.admins.forEach(id => {
+        if (proof.length > 50) bot.sendPhoto(id, proof, {caption: notif, parse_mode:'Markdown', reply_markup: kb}).catch(()=>{});
+        else bot.sendMessage(id, `${notif}\nBukti: ${proof}`, {parse_mode:'Markdown', reply_markup: kb}).catch(()=>{});
     });
 }
 
-// 405 Handler
-export async function GET() { return NextResponse.json({ status: 'Bot Active', dbProducts: db.products.length }); }
+async function processOrder(inv: string, status: 'PAID'|'REJECTED', adminId: number, msgId: number) {
+    const o = db.orders.find(x => x.invoice === inv);
+    if (!o) return bot.sendMessage(adminId, "Order tidak ditemukan.");
+    if (o.status !== 'PENDING') return bot.sendMessage(adminId, "Order sudah diproses sebelumnya.");
+
+    o.status = status;
+    const isPaid = status === 'PAID';
+    
+    // Feedback ke Admin
+    await bot.editMessageCaption(
+        `${isPaid ? '✅' : '❌'} **${status}** | ${o.invoice} | ${o.buyerName}`, 
+        { chat_id: adminId, message_id: msgId, parse_mode: 'Markdown' }
+    ).catch(() => bot.sendMessage(adminId, `Order ${inv} status: ${status}`));
+
+    // Notif ke Buyer
+    if (!isPaid) {
+        // Balikin stok
+        o.items.forEach(i => { const p = db.products.find(x => x.id === i.productId); if(p) p.stock += i.qty; });
+        bot.sendMessage(o.buyerId, `❌ Maaf pesanan **${inv}** DITOLAK (Bukti/Stok tidak valid).`);
+    } else {
+        bot.sendMessage(o.buyerId, `✅ Hore! Pembayaran **${inv}** diterima. Pesanan sedang diproses.`);
+    }
+}
+
+async function showAdminList(chatId: number) {
+    const text = `🔧 **ADMIN**\nProduk: ${db.products.length}\nOrder Pending: ${db.orders.filter(o=>o.status==='PENDING').length}`;
+    await bot.sendMessage(chatId, text, {
+        parse_mode:'Markdown',
+        reply_markup: {
+            inline_keyboard: [
+                [{text:"➕ Tambah Item", callback_data:"adm_add"}, {text:"📥 Download Rekap", callback_data:"adm_xl"}],
+                [{text: "🏠 Mode User", callback_data:"menu_main"}]
+            ]
+        }
+    });
+}
+
+// 405 fix
+export async function GET() { return NextResponse.json({ status: 'PRO v3.0 - Grid & Desc' }); }
