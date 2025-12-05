@@ -9,14 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "grammy": "^1.38.4",
     "next": "16.0.7",
+    "node-telegram-bot-api": "^0.66.0",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/node-telegram-bot-api": "^0.64.13",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
