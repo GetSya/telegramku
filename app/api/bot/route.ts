@@ -1,68 +1,55 @@
-// app/api/bot/route.ts
 import { NextResponse } from 'next/server';
 import TelegramBot from 'node-telegram-bot-api';
 
-// 1. Pastikan Token ada
-const token = process.env.TELEGRAM_BOT_TOKEN;
-if (!token) {
-  throw new Error('TELEGRAM_BOT_TOKEN tidak ditemukan di Environment Variables');
-}
-
-// 2. Inisialisasi Bot (PENTING: polling harus FALSE)
-// Kita gunakan polling: false karena di Vercel kita pakai Webhook
-const bot = new TelegramBot(token, { polling: false });
-
-// 3. Konfigurasi Route Next.js agar dinamis (tidak di-cache)
+// PENTING: Mencegah Next.js melakukan caching static
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
 
-// --- LOGIKA PESAN ---
-// Kita pasang listener di sini, tapi ingat: di serverless, listener ini
-// dibuat ulang setiap kali ada pesan masuk.
-bot.on('message', async (msg) => {
-  if (!msg.text) return;
+const token = process.env.TELEGRAM_BOT_TOKEN;
 
-  const chatId = msg.chat.id;
-  const text = msg.text;
+// Inisialisasi bot tanpa polling
+const bot = new TelegramBot(token || '', { polling: false });
 
-  console.log(`[LOG] Pesan masuk dari ${msg.from?.first_name}: ${text}`);
-
-  try {
-    if (text === '/start') {
-      await bot.sendMessage(chatId, 'Halo! Bot Node.js API sudah aktif di Vercel.');
-    } else {
-      await bot.sendMessage(chatId, `Kamu bilang: ${text}`);
-    }
-  } catch (error) {
-    console.error('[ERROR] Gagal mengirim pesan:', error);
-  }
-});
-// --------------------
-
-// 4. Handler POST (Pintu masuk dari Telegram)
 export async function POST(req: Request) {
-  try {
-    // Ambil data JSON yang dikirim Telegram
-    const body = await req.json();
+  // 1. Cek Token dulu
+  if (!token) {
+    console.error('❌ ERROR: TELEGRAM_BOT_TOKEN belum disetting di Vercel!');
+    return NextResponse.json({ error: 'Token missing' }, { status: 500 });
+  }
 
-    // Cek apakah ini update yang valid
-    if (!body || !body.update_id) {
-      return NextResponse.json({ status: 'No update_id found' }, { status: 400 });
+  try {
+    // 2. Baca data yang dikirim Telegram
+    const body = await req.json();
+    console.log('📩 Data Masuk:', JSON.stringify(body, null, 2));
+
+    // 3. Cek apakah ada pesan teks
+    if (body.message && body.message.text) {
+      const chatId = body.message.chat.id;
+      const text = body.message.text;
+
+      console.log(`🗣️ Pesan dari user: ${text}`);
+
+      // 4. Kirim Balasan Langsung (Tanpa bot.on)
+      await bot.sendMessage(chatId, `Bot Vercel menerima: "${text}"`);
+      
+      console.log('✅ Balasan terkirim ke Telegram');
+    } else {
+        console.log('⚠️ Bukan pesan teks atau struktur body berbeda');
     }
 
-    // PENTING: Oper data ini ke library node-telegram-bot-api
-    // Library ini akan membaca data dan memicu event bot.on('message') di atas
-    bot.processUpdate(body);
-
-    // Beri respon 200 OK ke Telegram agar tidak dikirim ulang
+    // 5. Beri respon 200 OK ke Telegram supaya tidak dikirim ulang
     return NextResponse.json({ status: 'ok' });
 
-  } catch (error) {
-    console.error('Error handling request:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  } catch (error: any) {
+    console.error('❌ Terjadi Error:', error.message);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-// Handler GET (Cuma buat ngetes di browser kalau route ini hidup)
+// Handler GET untuk test manual di browser
 export async function GET() {
-  return NextResponse.json({ status: 'Bot API is running correctly' });
+  return NextResponse.json({ 
+    status: 'Bot API Ready', 
+    tokenCheck: process.env.TELEGRAM_BOT_TOKEN ? 'Token Ada' : 'Token Kosong' 
+  });
 }
