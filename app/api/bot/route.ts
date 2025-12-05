@@ -569,13 +569,14 @@ async function handleCallback(query: TelegramBot.CallbackQuery) {
     try {
       const buffer = await generateExcelReport();
       await bot.sendDocument(
-        chatId,
-        buffer,
-        {
-          filename: `Laporan_${new Date().toISOString().split('T')[0]}.xlsx`,
-          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        }
-      );
+  chatId,
+  buffer,
+  {}, // Argumen ke-3: Kosongkan jika tidak ada caption
+  {   // Argumen ke-4: Metadata file (filename & contentType masuk sini)
+    filename: `Laporan_${new Date().toISOString().split('T')[0]}.xlsx`,
+    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  }
+);
     } catch (error) {
       await bot.sendMessage(chatId, "❌ Gagal membuat laporan.");
     }
