@@ -971,14 +971,34 @@ async function processInputSteps(chatId: number, text: string, session: UserSess
     case 'ADD_PROD_NAME':
       session.temp.name = text;
       session.step = 'ADD_PROD_CAT';
-      await bot.sendMessage(chatId, "📂 Kategori:", { reply_markup: { keyboard: [db.categories.map(c=>c), ['Batal']], resize_keyboard: true, one_time_keyboard: true } });
+      await bot.sendMessage(chatId, "📂 Kategori:", { 
+        reply_markup: { 
+          keyboard: [
+            // PERBAIKAN: Ubah string menjadi object { text: c }
+            db.categories.map(c => ({ text: c })), 
+            [{ text: 'Batal' }]
+          ], 
+          resize_keyboard: true, 
+          one_time_keyboard: true 
+        } 
+      });
       break;
 
     case 'ADD_PROD_CAT':
       session.temp.category = text;
       if (!db.categories.includes(text)) db.categories.push(text);
       session.step = 'ADD_PROD_UNIT';
-      await bot.sendMessage(chatId, "📏 Satuan:", { reply_markup: { keyboard: [db.units.map(u=>u), ['Batal']], resize_keyboard: true, one_time_keyboard: true } });
+      await bot.sendMessage(chatId, "📏 Satuan:", { 
+        reply_markup: { 
+          keyboard: [
+            // PERBAIKAN: Ubah string menjadi object { text: u }
+            db.units.map(u => ({ text: u })), 
+            [{ text: 'Batal' }]
+          ], 
+          resize_keyboard: true, 
+          one_time_keyboard: true 
+        } 
+      });
       break;
 
     case 'ADD_PROD_UNIT':
